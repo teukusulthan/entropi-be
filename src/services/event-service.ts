@@ -402,6 +402,333 @@ export class EventService {
     );
   }
 
+  async verifyLedgerBalance(orderId: string) {
+    const entries = await this.db.ledgerEntry.findMany({
+      where: { orderId },
+    });
+
+    let totalDebits = new Decimal(0);
+    let totalCredits = new Decimal(0);
+
+    for (const entry of entries) {
+      if (entry.debit) {
+        totalDebits = totalDebits.plus(fromPrismaDecimal(entry.debit));
+      }
+      if (entry.credit) {
+        totalCredits = totalCredits.plus(fromPrismaDecimal(entry.credit));
+      }
+    }
+
+    return {
+      orderId,
+      totalDebits: toFixed4(totalDebits),
+      totalCredits: toFixed4(totalCredits),
+      balanced: totalDebits.equals(totalCredits),
+      entries,
+    };
+  }
+
+  async processRefund(orderId: string, idempotencyKey: string) {
+    return this.db.$transaction(
+      async (tx: TxClient) => {
+        const existing = await tx.eventLog.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) {
+          const order = await tx.order.findUnique({ where: { id: existing.aggregateId } });
+          return { order, event: existing, idempotent: true };
+        }
+
+        const order = await tx.order.findUnique({ where: { id: orderId } });
+        if (!order) throw new OrderNotFoundError(orderId);
+
+        validateTransition(order.status, OrderStatus.REFUNDED);
+
+        const paymentAmount = fromPrismaDecimal(order.paymentReceived);
+        const feeAmount = fromPrismaDecimal(order.feeAmount);
+        const eventId = uuid();
+
+        const updated = await tx.order.updateMany({
+          where: { id: orderId, version: order.version },
+          data: {
+            status: OrderStatus.REFUNDED,
+            version: order.version + 1,
+          },
+        });
+
+        if (updated.count === 0) {
+          throw new VersionConflictError();
+        }
+
+        const event = await tx.eventLog.create({
+          data: {
+            id: eventId,
+            aggregateId: orderId,
+            eventType: EventType.REFUND_COMPLETED,
+            payload: {
+              refundAmount: toFixed4(paymentAmount),
+              feeRefunded: toFixed4(feeAmount),
+            },
+            version: order.version + 1,
+            idempotencyKey,
+          },
+        });
+
+        await tx.ledgerEntry.createMany({
+          data: [
+            {
+              id: uuid(),
+              orderId,
+              account: AccountType.ORDER_BALANCE,
+              debit: new Prisma.Decimal(toFixed4(paymentAmount)),
+              credit: null,
+              description: `Refund: restoring order balance for ${orderId}`,
+              eventId,
+            },
+            {
+              id: uuid(),
+              orderId,
+              account: AccountType.PAYMENT_RECEIVED,
+              debit: null,
+              credit: new Prisma.Decimal(toFixed4(paymentAmount)),
+              description: `Refund: reversing payment for ${orderId}`,
+              eventId,
+            },
+          ],
+        });
+
+        if (feeAmount.greaterThan(0)) {
+          const feeReversalEventId = uuid();
+          await tx.eventLog.create({
+            data: {
+              id: feeReversalEventId,
+              aggregateId: orderId,
+              eventType: EventType.REFUND_COMPLETED,
+              payload: {
+                type: 'fee_reversal',
+                feeAmount: toFixed4(feeAmount),
+              },
+              version: order.version + 2,
+              idempotencyKey: `${idempotencyKey}-fee-reversal`,
+            },
+          });
+
+          await tx.ledgerEntry.createMany({
+            data: [
+              {
+                id: uuid(),
+                orderId,
+                account: AccountType.PAYMENT_RECEIVED,
+                debit: new Prisma.Decimal(toFixed4(feeAmount)),
+                credit: null,
+                description: `Refund: reversing fee deduction for ${orderId}`,
+                eventId: feeReversalEventId,
+              },
+              {
+                id: uuid(),
+                orderId,
+                account: AccountType.FEES_OWED,
+                debit: null,
+                credit: new Prisma.Decimal(toFixed4(feeAmount)),
+                description: `Refund: reversing fee for ${orderId}`,
+                eventId: feeReversalEventId,
+              },
+            ],
+          });
+        }
+
+        const updatedOrder = await tx.order.findUnique({ where: { id: orderId } });
+
+        return { order: updatedOrder, event, idempotent: false };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 10000,
+      }
+    );
+  }
+
+  async markOrderShipped(orderId: string, idempotencyKey: string) {
+    return this.recordStatusTransition(
+      orderId,
+      OrderStatus.SHIPPED,
+      EventType.ORDER_SHIPPED,
+      idempotencyKey
+    );
+  }
+
+  async markOrderDelivered(orderId: string, idempotencyKey: string) {
+    return this.recordStatusTransition(
+      orderId,
+      OrderStatus.DELIVERED,
+      EventType.ORDER_DELIVERED,
+      idempotencyKey
+    );
+  }
+
+  async startPaymentProcessing(orderId: string, idempotencyKey: string) {
+    return this.db.$transaction(
+      async (tx: TxClient) => {
+        const existing = await tx.eventLog.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) {
+          const order = await tx.order.findUnique({ where: { id: existing.aggregateId } });
+          return { order, event: existing, idempotent: true };
+        }
+
+        const order = await tx.order.findUnique({ where: { id: orderId } });
+        if (!order) throw new OrderNotFoundError(orderId);
+
+        validateTransition(order.status, OrderStatus.PAYMENT_PROCESSING);
+
+        const eventId = uuid();
+
+        const updated = await tx.order.updateMany({
+          where: { id: orderId, version: order.version },
+          data: {
+            status: OrderStatus.PAYMENT_PROCESSING,
+            version: order.version + 1,
+          },
+        });
+
+        if (updated.count === 0) {
+          throw new VersionConflictError();
+        }
+
+        const event = await tx.eventLog.create({
+          data: {
+            id: eventId,
+            aggregateId: orderId,
+            eventType: EventType.PAYMENT_PROCESSING,
+            payload: { orderId },
+            version: order.version + 1,
+            idempotencyKey,
+          },
+        });
+
+        const updatedOrder = await tx.order.findUnique({ where: { id: orderId } });
+
+        return { order: updatedOrder, event, idempotent: false };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 10000,
+      }
+    );
+  }
+
+  async revertToPaymentPending(orderId: string, idempotencyKey: string) {
+    return this.db.$transaction(
+      async (tx: TxClient) => {
+        const existing = await tx.eventLog.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) {
+          const order = await tx.order.findUnique({ where: { id: existing.aggregateId } });
+          return { order, event: existing, idempotent: true };
+        }
+
+        const order = await tx.order.findUnique({ where: { id: orderId } });
+        if (!order) throw new OrderNotFoundError(orderId);
+
+        validateTransition(order.status, OrderStatus.PENDING);
+
+        const eventId = uuid();
+
+        const updated = await tx.order.updateMany({
+          where: { id: orderId, version: order.version },
+          data: {
+            status: OrderStatus.PENDING,
+            version: order.version + 1,
+          },
+        });
+
+        if (updated.count === 0) {
+          throw new VersionConflictError();
+        }
+
+        const event = await tx.eventLog.create({
+          data: {
+            id: eventId,
+            aggregateId: orderId,
+            eventType: EventType.ORDER_CREATED,
+            payload: { orderId, reason: 'payment_failed' },
+            version: order.version + 1,
+            idempotencyKey,
+          },
+        });
+
+        const updatedOrder = await tx.order.findUnique({ where: { id: orderId } });
+
+        return { order: updatedOrder, event, idempotent: false };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 10000,
+      }
+    );
+  }
+
+  private async recordStatusTransition(
+    orderId: string,
+    nextStatus: OrderStatus,
+    eventType: EventType,
+    idempotencyKey: string
+  ) {
+    return this.db.$transaction(
+      async (tx: TxClient) => {
+        const existing = await tx.eventLog.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) {
+          const order = await tx.order.findUnique({ where: { id: existing.aggregateId } });
+          return { order, event: existing, idempotent: true };
+        }
+
+        const order = await tx.order.findUnique({ where: { id: orderId } });
+        if (!order) throw new OrderNotFoundError(orderId);
+
+        validateTransition(order.status, nextStatus);
+
+        const eventId = uuid();
+
+        const updated = await tx.order.updateMany({
+          where: { id: orderId, version: order.version },
+          data: {
+            status: nextStatus,
+            version: order.version + 1,
+          },
+        });
+
+        if (updated.count === 0) {
+          throw new VersionConflictError();
+        }
+
+        const event = await tx.eventLog.create({
+          data: {
+            id: eventId,
+            aggregateId: orderId,
+            eventType,
+            payload: {
+              orderId,
+              status: nextStatus,
+            },
+            version: order.version + 1,
+            idempotencyKey,
+          },
+        });
+
+        const updatedOrder = await tx.order.findUnique({ where: { id: orderId } });
+
+        return { order: updatedOrder, event, idempotent: false };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 10000,
+      }
+    );
+  }
 }
 
 export const eventService = new EventService();
