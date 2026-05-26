@@ -2,6 +2,7 @@ import Fastify, { FastifyInstance, FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import { healthRoutes } from './routes/health-routes';
 import { orderRoutes } from './routes/order-routes';
+import { paymentRoutes } from './routes/payment-routes';
 import { config } from './config';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -19,5 +20,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
   await app.register(healthRoutes);
   await app.register(orderRoutes);
+  await app.register(paymentRoutes);
   return app;
 }
