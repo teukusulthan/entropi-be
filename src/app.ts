@@ -1,6 +1,7 @@
 import Fastify, { FastifyInstance, FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import { healthRoutes } from './routes/health-routes';
+import { orderRoutes } from './routes/order-routes';
 import { config } from './config';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -17,5 +18,6 @@ export async function buildApp(): Promise<FastifyInstance> {
     reply.status(statusCode).send({ error: code, message: error.message });
   });
   await app.register(healthRoutes);
+  await app.register(orderRoutes);
   return app;
 }
