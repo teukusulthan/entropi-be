@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderStatus {
+  PENDING
+  PAYMENT_PROCESSING
+  PAID
+  FEE_CALCULATED
+  SHIPPED
+  DELIVERED
+  REFUNDED
+}
+
+enum EventType {
+  ORDER_CREATED
+  PAYMENT_PROCESSING
+  PAYMENT_CONFIRMED
+  FEE_CALCULATED
+  ORDER_SHIPPED
+  ORDER_DELIVERED
+  REFUND_INITIATED
+  REFUND_COMPLETED
+  SETTLEMENT_PROCESSED
+}
+
+enum AccountType {
+  ORDER_BALANCE
+  ORDER_PENDING
+  PAYMENT_RECEIVED
+  FEES_OWED
+  SELLER_PAYOUT
+}
+
+enum SettlementStatus {
+  PENDING
+  COMPLETED
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  customerId      String
+  amount          Decimal     @db.Decimal(18, 4)
+  paymentMethod   String
+  status          OrderStatus @default(PENDING)
+  paymentReceived Decimal     @db.Decimal(18, 4) @default(0)
+  feeAmount       Decimal     @db.Decimal(18, 4) @default(0)
+  version         Int         @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  events  EventLog[]
+  ledger  LedgerEntry[]
+}
+
+model EventLog {
+  id             String    @id @default(uuid())
+  aggregateId    String
+  eventType      EventType
+  payload        Json
+  version        Int
+  timestamp      DateTime  @default(now())
+  idempotencyKey String    @unique
+
+  order   Order  @relation(fields: [aggregateId], references: [id])
+  ledger  LedgerEntry[]
+
+  @@unique([aggregateId, version])
+  @@index([aggregateId, version])
+  @@index([eventType])
+  @@index([timestamp])
+}
+
+model LedgerEntry {
+  id          String      @id @default(uuid())
+  orderId     String
+  account     AccountType
+  debit       Decimal?    @db.Decimal(18, 4)
+  credit      Decimal?    @db.Decimal(18, 4)
+  description String
+  eventId     String
+  timestamp   DateTime    @default(now())
+
+  order Order    @relation(fields: [orderId], references: [id])
+  event EventLog @relation(fields: [eventId], references: [id])
+
+  @@index([orderId])
+  @@index([account])
+}
+
+model Settlement {
+  id             String           @id @default(uuid())
+  settlementDate DateTime         @unique
+  idempotencyKey String           @unique
+  totalAmount    Decimal          @db.Decimal(18, 4)
+  totalFees      Decimal          @db.Decimal(18, 4)
+  netPayout      Decimal          @db.Decimal(18, 4)
+  orderCount     Int
+  processedOrderIds Json          @default("[]")
+  status         SettlementStatus @default(PENDING)
+  createdAt      DateTime         @default(now())
+}
