@@ -263,6 +263,145 @@ export class EventService {
     );
   }
 
+  async dailySettlement(date: Date, idempotencyKey: string) {
+    return this.db.$transaction(
+      async (tx: TxClient) => {
+        const startOfDay = new Date(date);
+        startOfDay.setUTCHours(0, 0, 0, 0);
+        const endOfDay = new Date(date);
+        endOfDay.setUTCHours(23, 59, 59, 999);
+
+        const existingByKey = await tx.settlement.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existingByKey) {
+          return {
+            settlement: existingByKey,
+            processedOrders: existingByKey.processedOrderIds as string[],
+            idempotent: true,
+          };
+        }
+
+        const existingSettlement = await tx.settlement.findUnique({
+          where: { settlementDate: startOfDay },
+        });
+        if (existingSettlement) {
+          return {
+            settlement: existingSettlement,
+            processedOrders: existingSettlement.processedOrderIds as string[],
+            idempotent: true,
+          };
+        }
+
+        const orders = await tx.order.findMany({
+          where: {
+            status: OrderStatus.FEE_CALCULATED,
+            updatedAt: {
+              gte: startOfDay,
+              lte: endOfDay,
+            },
+          },
+        });
+
+        if (orders.length === 0) {
+          const settlement = await tx.settlement.create({
+            data: {
+              id: uuid(),
+              settlementDate: startOfDay,
+              idempotencyKey,
+              totalAmount: new Prisma.Decimal('0.0000'),
+              totalFees: new Prisma.Decimal('0.0000'),
+              netPayout: new Prisma.Decimal('0.0000'),
+              orderCount: 0,
+              processedOrderIds: [],
+              status: 'COMPLETED',
+            },
+          });
+          return { settlement, processedOrders: [], idempotent: false };
+        }
+
+        let totalPayments = new Decimal(0);
+        let totalFees = new Decimal(0);
+        const processedOrders: string[] = [];
+
+        for (const order of orders) {
+          const payment = fromPrismaDecimal(order.paymentReceived);
+          const fee = fromPrismaDecimal(order.feeAmount);
+          const netPayout = payment.minus(fee);
+
+          totalPayments = totalPayments.plus(payment);
+          totalFees = totalFees.plus(fee);
+
+          const eventId = uuid();
+          const settlementIdempotencyKey = `settlement-${startOfDay.toISOString()}-${order.id}`;
+
+          await tx.eventLog.create({
+            data: {
+              id: eventId,
+              aggregateId: order.id,
+              eventType: EventType.SETTLEMENT_PROCESSED,
+              payload: {
+                payment: toFixed4(payment),
+                fee: toFixed4(fee),
+                netPayout: toFixed4(netPayout),
+                settlementDate: startOfDay.toISOString(),
+              },
+              version: order.version + 1,
+              idempotencyKey: settlementIdempotencyKey,
+            },
+          });
+
+          await tx.ledgerEntry.createMany({
+            data: [
+              {
+                id: uuid(),
+                orderId: order.id,
+                account: AccountType.SELLER_PAYOUT,
+                debit: new Prisma.Decimal(toFixed4(netPayout)),
+                credit: null,
+                description: `Settlement payout for order ${order.id}`,
+                eventId,
+              },
+              {
+                id: uuid(),
+                orderId: order.id,
+                account: AccountType.PAYMENT_RECEIVED,
+                debit: null,
+                credit: new Prisma.Decimal(toFixed4(netPayout)),
+                description: `Settlement deduction from payment for order ${order.id}`,
+                eventId,
+              },
+            ],
+          });
+
+          processedOrders.push(order.id);
+        }
+
+        const netPayout = totalPayments.minus(totalFees);
+
+        const settlement = await tx.settlement.create({
+          data: {
+            id: uuid(),
+            settlementDate: startOfDay,
+            idempotencyKey,
+            totalAmount: new Prisma.Decimal(toFixed4(totalPayments)),
+            totalFees: new Prisma.Decimal(toFixed4(totalFees)),
+            netPayout: new Prisma.Decimal(toFixed4(netPayout)),
+            orderCount: orders.length,
+            processedOrderIds: processedOrders,
+            status: 'COMPLETED',
+          },
+        });
+
+        return { settlement, processedOrders, idempotent: false };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 30000,
+      }
+    );
+  }
+
 }
 
 export const eventService = new EventService();
