@@ -177,6 +177,92 @@ export class EventService {
     );
   }
 
+  async calculateFees(
+    orderId: string,
+    amount: string,
+    idempotencyKey: string
+  ) {
+    return this.db.$transaction(
+      async (tx: TxClient) => {
+        const existing = await tx.eventLog.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) {
+          const order = await tx.order.findUnique({ where: { id: existing.aggregateId } });
+          return { order, event: existing, idempotent: true };
+        }
+
+        const order = await tx.order.findUnique({ where: { id: orderId } });
+        if (!order) throw new OrderNotFoundError(orderId);
+
+        validateTransition(order.status, OrderStatus.FEE_CALCULATED);
+
+        const decimalAmount = toDecimal(amount);
+        const feeAmount = calculateFee(decimalAmount, config.feeRate);
+        const eventId = uuid();
+
+        const updated = await tx.order.updateMany({
+          where: { id: orderId, version: order.version },
+          data: {
+            status: OrderStatus.FEE_CALCULATED,
+            feeAmount: new Prisma.Decimal(toFixed4(feeAmount)),
+            version: order.version + 1,
+          },
+        });
+
+        if (updated.count === 0) {
+          throw new VersionConflictError();
+        }
+
+        const event = await tx.eventLog.create({
+          data: {
+            id: eventId,
+            aggregateId: orderId,
+            eventType: EventType.FEE_CALCULATED,
+            payload: {
+              orderAmount: toFixed4(decimalAmount),
+              feeAmount: toFixed4(feeAmount),
+              feeRate: config.feeRate,
+            },
+            version: order.version + 1,
+            idempotencyKey,
+          },
+        });
+
+        await tx.ledgerEntry.createMany({
+          data: [
+            {
+              id: uuid(),
+              orderId,
+              account: AccountType.FEES_OWED,
+              debit: new Prisma.Decimal(toFixed4(feeAmount)),
+              credit: null,
+              description: `Fee calculated for order ${orderId}: ${toFixed4(feeAmount)}`,
+              eventId,
+            },
+            {
+              id: uuid(),
+              orderId,
+              account: AccountType.PAYMENT_RECEIVED,
+              debit: null,
+              credit: new Prisma.Decimal(toFixed4(feeAmount)),
+              description: `Fee deducted from payment for order ${orderId}`,
+              eventId,
+            },
+          ],
+        });
+
+        const updatedOrder = await tx.order.findUnique({ where: { id: orderId } });
+
+        return { order: updatedOrder, event, idempotent: false };
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 10000,
+      }
+    );
+  }
+
 }
 
 export const eventService = new EventService();
