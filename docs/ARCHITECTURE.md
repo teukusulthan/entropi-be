@@ -117,10 +117,11 @@ If needed, additional read models can be built by replaying the event log. The `
    - Create ledger entries (debit FEES_OWED, credit PAYMENT_RECEIVED)
 
 ### Settlement
-1. EventService.dailySettlement() processes all FEE_CALCULATED orders:
+1. EventService.dailySettlement() processes all DELIVERED orders for the given date:
    - Check idempotency key and settlement date
+   - Query DELIVERED orders with updatedAt within the settlement date range
    - Sum payments and fees using Decimal.js
-   - Create SETTLEMENT_PROCESSED events per order
+   - Create SETTLEMENT_PROCESSED events per order and increment order version
    - Create settlement payout ledger entries per order
    - Create Settlement aggregate record with processed order IDs
    - Repeated settlement calls return the existing settlement result
