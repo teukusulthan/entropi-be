@@ -124,6 +124,13 @@ describe('PaymentService', () => {
       expect(result.order?.status).toBe('PAID');
       expect(mockEventService.recordPayment).toHaveBeenCalledTimes(1);
     });
+
+    it('should reuse the original Stripe charge when retrying the same payment key', async () => {
+      const firstCharge = await stripeMock.charge('50.00', 'cust-1', 'payment-key');
+      const retryCharge = await stripeMock.charge('50.00', 'cust-1', 'payment-key');
+
+      expect(retryCharge).toEqual(firstCharge);
+    });
   });
 
   describe('StripeMock', () => {

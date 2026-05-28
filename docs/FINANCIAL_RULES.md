@@ -65,6 +65,7 @@ Every financial event produces exactly two ledger entries with equal amounts:
 | Fee Calculated | FEES_OWED | PAYMENT_RECEIVED | Fee amount |
 | Settlement Processed | SELLER_PAYOUT | PAYMENT_RECEIVED | Net payout |
 | Refund | ORDER_BALANCE | PAYMENT_RECEIVED | Refund amount |
+| Refund Fee Reversal | PAYMENT_RECEIVED | FEES_OWED | Fee amount |
 
 ### Invariant: Debits = Credits
 
@@ -110,6 +111,7 @@ Final balances:
 - **Formula**: `feeAmount = paymentAmount * 0.03`
 - **Rounding**: ROUND_HALF_UP (standard financial rounding)
 - **Timing**: Fees are calculated after payment confirmation, before settlement
+- **Frontend display**: Dashboard totals and running balances use scaled integer string arithmetic instead of JavaScript floating point.
 
 ### Examples
 

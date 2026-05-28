@@ -86,6 +86,7 @@ if (existing) {
 - Network failures can cause retries where the server processed the request but the client didn't get the response
 - Without idempotency, retrying a payment could charge the customer twice
 - The UNIQUE constraint catches any race condition in the check-then-create pattern
+- Payment processing uses a separate Stripe mock idempotency key so a retry reuses the original charge result.
 
 ## Handling 1000 Concurrent Orders
 
@@ -111,6 +112,17 @@ When 1000 concurrent order creation requests arrive:
    - Second payment gets VersionConflictError (HTTP 409)
    - Client can retry with fresh state
 
+### API Stress Command
+
+The backend includes a live API stress script:
+
+```bash
+cd entropi-backend
+API_BASE_URL=http://localhost:3001/api ORDER_COUNT=1000 TARGET_MS=10000 npm run stress:orders
+```
+
+The script creates orders through `POST /api/orders`, checks that all returned order IDs are unique, and samples `GET /api/verify-ledger/:id` to verify ledger balance against the configured backend and PostgreSQL database.
+
 ## Failure Scenarios
 
 | Scenario | Mechanism | Outcome |
@@ -120,3 +132,4 @@ When 1000 concurrent order creation requests arrive:
 | DB connection drops mid-transaction | Serializable transaction | Everything rolls back |
 | Stripe succeeds but DB fails | Stripe idempotency key + revert | Order stays PENDING, can retry |
 | Settlement runs twice for same date | Unique settlement date + idempotent readback | Existing settlement is returned |
+| Settlement runs for a later date | Existing SETTLEMENT_PROCESSED event exclusion | Previously settled orders are skipped |

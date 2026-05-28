@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:ci": "jest --ci --forceExit",
+    "stress:orders": "tsx scripts/stress-orders.ts",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",

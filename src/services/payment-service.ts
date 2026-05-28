@@ -10,23 +10,35 @@ export interface StripeCharge {
 
 export class StripeMock {
   private shouldFail: boolean = false;
+  private chargesByKey = new Map<string, StripeCharge>();
 
   setFailMode(fail: boolean): void {
     this.shouldFail = fail;
   }
 
-  async charge(amount: string, customerId: string): Promise<StripeCharge> {
+  async charge(amount: string, customerId: string, idempotencyKey?: string): Promise<StripeCharge> {
+    if (idempotencyKey) {
+      const existing = this.chargesByKey.get(idempotencyKey);
+      if (existing) return existing;
+    }
+
     await new Promise((r) => setTimeout(r, Math.random() * 50));
 
     if (this.shouldFail) {
       throw new CardDeclinedError('Card declined');
     }
 
-    return {
+    const charge: StripeCharge = {
       chargeId: `ch_${uuid()}`,
       status: 'succeeded',
       amount,
     };
+
+    if (idempotencyKey) {
+      this.chargesByKey.set(idempotencyKey, charge);
+    }
+
+    return charge;
   }
 }
 
@@ -67,7 +79,7 @@ export class PaymentService {
     }
 
     try {
-      const charge = await this.stripe.charge(amount, customerId);
+      const charge = await this.stripe.charge(amount, customerId, `${idempotencyKey}-stripe`);
 
       const paymentResult = await this.eventService.recordPayment(
         orderId,

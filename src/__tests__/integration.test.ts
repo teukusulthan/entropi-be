@@ -324,6 +324,48 @@ describe('Integration Tests', () => {
       const balance = await eventService.verifyLedgerBalance('order-refund');
       expect(balance.balanced).toBe(true);
     });
+
+    it('should keep order version aligned when refund reverses a calculated fee', async () => {
+      mockPrisma.eventLog.findUnique.mockResolvedValue(null);
+      mockPrisma.order.findUnique
+        .mockResolvedValueOnce({
+          id: 'order-refund-fee',
+          status: 'FEE_CALCULATED',
+          version: 4,
+          paymentReceived: new Prisma.Decimal('100.0000'),
+          feeAmount: new Prisma.Decimal('3.0000'),
+        })
+        .mockResolvedValueOnce({
+          id: 'order-refund-fee',
+          status: 'REFUNDED',
+          version: 6,
+        });
+      mockPrisma.order.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.eventLog.create
+        .mockResolvedValueOnce({
+          id: 'evt-refund-payment',
+          eventType: 'REFUND_COMPLETED',
+          version: 5,
+        })
+        .mockResolvedValueOnce({
+          id: 'evt-refund-fee',
+          eventType: 'REFUND_COMPLETED',
+          version: 6,
+        });
+      mockPrisma.ledgerEntry.createMany.mockResolvedValue({ count: 2 });
+
+      const result = await eventService.processRefund('order-refund-fee', 'refund-fee-key');
+
+      expect(result.order?.version).toBe(6);
+      expect(mockPrisma.order.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: OrderStatus.REFUNDED,
+            version: 6,
+          }),
+        })
+      );
+    });
   });
 
   describe('Projection consistency', () => {

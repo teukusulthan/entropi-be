@@ -300,6 +300,11 @@ export class EventService {
               gte: startOfDay,
               lte: endOfDay,
             },
+            events: {
+              none: {
+                eventType: EventType.SETTLEMENT_PROCESSED,
+              },
+            },
           },
         });
 
@@ -455,12 +460,13 @@ export class EventService {
         const paymentAmount = fromPrismaDecimal(order.paymentReceived);
         const feeAmount = fromPrismaDecimal(order.feeAmount);
         const eventId = uuid();
+        const finalVersion = order.version + (feeAmount.greaterThan(0) ? 2 : 1);
 
         const updated = await tx.order.updateMany({
           where: { id: orderId, version: order.version },
           data: {
             status: OrderStatus.REFUNDED,
-            version: order.version + 1,
+            version: finalVersion,
           },
         });
 

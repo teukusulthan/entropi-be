@@ -60,6 +60,20 @@ describe('SettlementService', () => {
       expect(result.settlement.status).toBe('COMPLETED');
       expect(result.processedOrders).toHaveLength(1);
       expect(result.processedOrders[0]).toBe('order-settle-1');
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith({
+        where: {
+          status: 'DELIVERED',
+          updatedAt: {
+            gte: new Date('2024-01-15T00:00:00.000Z'),
+            lte: new Date('2024-01-15T23:59:59.999Z'),
+          },
+          events: {
+            none: {
+              eventType: 'SETTLEMENT_PROCESSED',
+            },
+          },
+        },
+      });
     });
 
     it('should return existing settlement for duplicate date', async () => {

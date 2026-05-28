@@ -105,9 +105,10 @@ If needed, additional read models can be built by replaying the event log. The `
 1. API receives POST /api/orders/:id/pay
 2. PaymentService.processPayment() orchestrates:
    - Transition order to PAYMENT_PROCESSING (with version check)
-   - Call StripeMock.charge() (with simulated latency)
+   - Call StripeMock.charge() with a payment-scoped idempotency key
    - On success: EventService.recordPayment() creates PAYMENT_CONFIRMED event + ledger entries
    - On failure: EventService.revertToPaymentPending() reverts status
+   - If the payment flow is retried after a processing event was already recorded, the Stripe mock returns the original charge for the same key.
 
 ### Fee Calculation
 1. EventService.calculateFees() in serializable transaction:
@@ -119,7 +120,7 @@ If needed, additional read models can be built by replaying the event log. The `
 ### Settlement
 1. EventService.dailySettlement() processes all DELIVERED orders for the given date:
    - Check idempotency key and settlement date
-   - Query DELIVERED orders with updatedAt within the settlement date range
+   - Query DELIVERED orders with updatedAt within the settlement date range and no existing SETTLEMENT_PROCESSED event
    - Sum payments and fees using Decimal.js
    - Create SETTLEMENT_PROCESSED events per order and increment order version
    - Create settlement payout ledger entries per order
@@ -129,6 +130,12 @@ If needed, additional read models can be built by replaying the event log. The `
 ### Fulfillment
 1. EventService.markOrderShipped() validates FEE_CALCULATED -> SHIPPED and emits ORDER_SHIPPED.
 2. EventService.markOrderDelivered() validates SHIPPED -> DELIVERED and emits ORDER_DELIVERED.
+
+### Refunds
+1. EventService.processRefund() validates PAID/FEE_CALCULATED -> REFUNDED.
+2. Payment reversal creates debit ORDER_BALANCE and credit PAYMENT_RECEIVED entries.
+3. If fees were calculated, a second fee-reversal event restores PAYMENT_RECEIVED and credits FEES_OWED.
+4. The order version is advanced to the final refund event version so the read model and event stream stay aligned.
 
 ## Technology Choices
 
