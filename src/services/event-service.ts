@@ -295,7 +295,7 @@ export class EventService {
 
         const orders = await tx.order.findMany({
           where: {
-            status: OrderStatus.FEE_CALCULATED,
+            status: OrderStatus.DELIVERED,
             updatedAt: {
               gte: startOfDay,
               lte: endOfDay,
@@ -373,6 +373,14 @@ export class EventService {
               },
             ],
           });
+
+          const versionUpdated = await tx.order.updateMany({
+            where: { id: order.id, version: order.version },
+            data: { version: order.version + 1 },
+          });
+          if (versionUpdated.count === 0) {
+            throw new VersionConflictError();
+          }
 
           processedOrders.push(order.id);
         }
@@ -652,7 +660,7 @@ export class EventService {
           data: {
             id: eventId,
             aggregateId: orderId,
-            eventType: EventType.ORDER_CREATED,
+            eventType: EventType.PAYMENT_FAILED,
             payload: { orderId, reason: 'payment_failed' },
             version: order.version + 1,
             idempotencyKey,
