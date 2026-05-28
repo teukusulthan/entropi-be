@@ -133,3 +133,49 @@ The script creates orders through `POST /api/orders`, checks that all returned o
 | Stripe succeeds but DB fails | Stripe idempotency key + revert | Order stays PENDING, can retry |
 | Settlement runs twice for same date | Unique settlement date + idempotent readback | Existing settlement is returned |
 | Settlement runs for a later date | Existing SETTLEMENT_PROCESSED event exclusion | Previously settled orders are skipped |
+
+## Operation-Level Concurrency Notes
+
+### Order Creation
+
+Order creation is naturally scalable because each request creates a separate aggregate. The key concurrency risk is duplicate retry, not row contention. The system handles this by checking `EventLog.idempotencyKey` before creating a new order and by enforcing that key as unique in the database.
+
+### Payment Confirmation
+
+Payment is the highest-risk operation because it has an external side effect. The flow is split into two steps:
+
+1. Move the order from `PENDING` to `PAYMENT_PROCESSING`.
+2. Confirm payment after the Stripe mock returns a charge.
+
+Both state-changing steps use optimistic locking. If two payment requests race, only one request can update the order at the expected version. The other request receives `VersionConflictError` instead of double-confirming payment.
+
+The Stripe mock stores charge results by payment-scoped idempotency key. This models how a real payment provider prevents duplicate charges when the same request is retried.
+
+### Fee Calculation
+
+Fee calculation can only happen after payment confirmation. It updates the order from `PAID` to `FEE_CALCULATED` with a version guard and writes balanced fee ledger entries in the same transaction.
+
+### Settlement
+
+Settlement is idempotent at two levels:
+
+- `Settlement.idempotencyKey` prevents duplicate calls with the same request key.
+- `Settlement.settlementDate` prevents two settlement records for the same day.
+
+Additionally, settled orders are excluded from future settlement runs by checking that the order has no existing `SETTLEMENT_PROCESSED` event. This protects against re-paying an order if its `updatedAt` changes after settlement.
+
+### Refunds
+
+Refunds use the same version guard as other transitions. When a fee was already calculated, refund creates two events: payment reversal and fee reversal. The order version is advanced to the final event version so future transitions cannot reuse an event version.
+
+## Database Constraints Used for Safety
+
+| Constraint | Purpose |
+|---|---|
+| `EventLog.idempotencyKey` unique | Prevents duplicate event creation on retries. |
+| `EventLog(aggregateId, version)` unique | Prevents two events from occupying the same aggregate sequence. |
+| `Settlement.settlementDate` unique | Prevents duplicate settlement for the same date. |
+| `Settlement.idempotencyKey` unique | Prevents duplicate settlement request handling. |
+| Ledger debit/credit check constraint | Ensures every ledger entry has exactly one accounting side. |
+
+These constraints are deliberately enforced in the database, not only in application logic, because database constraints are the last line of defense under concurrent access.

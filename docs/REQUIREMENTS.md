@@ -38,4 +38,4 @@ This document maps the implementation to the Ent-JFE-20/05/26 requirements.
 - Architecture: `docs/ARCHITECTURE.md`
 - Concurrency strategy: `docs/CONCURRENCY.md`
 - Financial rules: `docs/FINANCIAL_RULES.md`
-- Code review findings: `docs/CODE_REVIEW.md`
+- Full project explanation: `docs/PROJECT_EXPLANATION.md`

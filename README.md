@@ -78,5 +78,5 @@ See `docs/` for detailed documentation:
 - `docs/ARCHITECTURE.md`
 - `docs/CONCURRENCY.md`
 - `docs/FINANCIAL_RULES.md`
-- `docs/CODE_REVIEW.md`
+- `docs/PROJECT_EXPLANATION.md`
 - `docs/REQUIREMENTS.md`

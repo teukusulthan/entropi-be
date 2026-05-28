@@ -147,3 +147,81 @@ If needed, additional read models can be built by replaying the event log. The `
 | Precision | Decimal.js | No floating-point errors for financial calculations |
 | Validation | Zod | Runtime type checking, composable schemas |
 | Testing | Jest | Mature ecosystem, mocking support, parallel execution |
+
+## Database Model Responsibilities
+
+### Order
+
+`Order` is the query-optimized read model. It stores the current operational state of an order: customer, amount, payment method, status, received payment amount, calculated fee, version, and timestamps. It is not the source of truth for historical changes. Its purpose is to make dashboard and API reads fast without replaying the full event stream for every request.
+
+### EventLog
+
+`EventLog` is the immutable write model. Every meaningful state transition is represented as an event with an aggregate ID, event type, payload, version, timestamp, and idempotency key. The pair `(aggregateId, version)` gives each order a strict event sequence. The unique `idempotencyKey` prevents duplicate event creation when clients retry requests.
+
+### LedgerEntry
+
+`LedgerEntry` records the accounting effect of each financial event. It links back to both the order and the event that produced it. Each row contains exactly one side of a double-entry posting: either a debit or a credit. This design makes the ledger easy to audit and reconcile while keeping the event payload focused on business facts.
+
+### Settlement
+
+`Settlement` represents a daily payout batch. It stores the settlement date, idempotency key, totals, order count, processed order IDs, status, and creation timestamp. It also prevents a settlement for the same date from being created twice.
+
+## State Machine
+
+The order lifecycle is intentionally strict:
+
+```
+PENDING
+  -> PAYMENT_PROCESSING
+  -> PAID
+  -> FEE_CALCULATED
+  -> SHIPPED
+  -> DELIVERED
+```
+
+Refunds are allowed from `PAID` and `FEE_CALCULATED`. Delivered and refunded orders are terminal states. Invalid transitions are rejected with `InvalidTransitionError`, which prevents financial actions from happening out of order.
+
+## API Layer
+
+The Fastify API is intentionally thin:
+
+1. Validate request body with Zod.
+2. Validate idempotency key for mutating endpoints.
+3. Call the appropriate service.
+4. Convert domain errors to HTTP responses.
+
+Business rules stay in services, not route handlers. This keeps the API layer simple and makes core behavior easier to test.
+
+## Service Layer
+
+### EventService
+
+`EventService` owns the financial write path. It creates events, updates the order projection, and writes ledger entries inside the same serializable transaction. The main methods are:
+
+- `recordOrder`
+- `startPaymentProcessing`
+- `recordPayment`
+- `calculateFees`
+- `processRefund`
+- `markOrderShipped`
+- `markOrderDelivered`
+- `dailySettlement`
+- `verifyLedgerBalance`
+
+### PaymentService
+
+`PaymentService` orchestrates payment flow. It does not write ledger entries directly. Instead, it moves the order to `PAYMENT_PROCESSING`, calls the Stripe mock with a stable key, then confirms payment through `EventService.recordPayment`.
+
+### SettlementService
+
+`SettlementService` provides a small facade for settlement execution, settlement history, and ledger verification endpoints.
+
+### LedgerService
+
+`LedgerService` reads ledger entries and calculates debit/credit totals for audit views.
+
+## Replay and Auditability
+
+The current `Order` row can be rebuilt from `EventLog` using the projection logic. This matters because the event stream is the historical record. If the read model were corrupted or needed a new shape, events can be replayed in version order to reconstruct status, payment received, fee amount, and lifecycle state.
+
+The ledger provides a separate audit trail for money movement. Events answer "what happened"; ledger entries answer "what was the accounting effect." Keeping those concerns separate makes the system easier to explain and verify.

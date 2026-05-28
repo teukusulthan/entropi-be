@@ -122,3 +122,65 @@ Final balances:
 | $100.00 | $3.0000 | $97.0000 |
 | $999,999.99 | $29,999.9997 | $969,999.9903 |
 | $0.01 | $0.0003 | $0.0097 |
+
+## Account Definitions
+
+| Account | Meaning |
+|---|---|
+| `ORDER_BALANCE` | Temporary receivable created when an order is recorded and cleared when payment is received. |
+| `ORDER_PENDING` | Offset account used at order creation so the initial order record is balanced. |
+| `PAYMENT_RECEIVED` | Gross funds received from the customer before fees and payout. |
+| `FEES_OWED` | Platform fee amount calculated from the paid amount. |
+| `SELLER_PAYOUT` | Net amount payable to the seller during settlement. |
+
+## Ledger Examples by Operation
+
+### Order Creation: $100.0000
+
+| Account | Debit | Credit |
+|---|---:|---:|
+| ORDER_BALANCE | 100.0000 | |
+| ORDER_PENDING | | 100.0000 |
+
+### Payment Confirmation: $100.0000
+
+| Account | Debit | Credit |
+|---|---:|---:|
+| PAYMENT_RECEIVED | 100.0000 | |
+| ORDER_BALANCE | | 100.0000 |
+
+### Fee Calculation: 3%
+
+| Account | Debit | Credit |
+|---|---:|---:|
+| FEES_OWED | 3.0000 | |
+| PAYMENT_RECEIVED | | 3.0000 |
+
+### Settlement: $97.0000 Net Payout
+
+| Account | Debit | Credit |
+|---|---:|---:|
+| SELLER_PAYOUT | 97.0000 | |
+| PAYMENT_RECEIVED | | 97.0000 |
+
+### Refund After Fee Calculation
+
+If an order is refunded after fees were calculated, the system reverses both payment and fee effects:
+
+| Account | Debit | Credit |
+|---|---:|---:|
+| ORDER_BALANCE | 100.0000 | |
+| PAYMENT_RECEIVED | | 100.0000 |
+| PAYMENT_RECEIVED | 3.0000 | |
+| FEES_OWED | | 3.0000 |
+
+The entries remain balanced because every debit has an equal credit.
+
+## Validation Rules
+
+- API inputs represent money as strings.
+- Services convert money strings to `Decimal` before calculation.
+- Values are stored as `DECIMAL(18,4)`.
+- Ledger verification sums debits and credits with Decimal arithmetic.
+- Frontend totals use scaled integer string arithmetic for display.
+- JavaScript floating point is not used for financial calculations.
