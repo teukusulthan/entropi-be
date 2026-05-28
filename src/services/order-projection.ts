@@ -13,7 +13,7 @@ export class OrderProjection {
   async listOrders() {
     const orders = await this.db.order.findMany({
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      take: 1000,
     });
 
     return orders.map((order) => ({
@@ -81,6 +81,9 @@ export class OrderProjection {
           break;
         case EventType.PAYMENT_PROCESSING:
           status = 'PAYMENT_PROCESSING';
+          break;
+        case EventType.PAYMENT_FAILED:
+          status = 'PENDING';
           break;
         case EventType.PAYMENT_CONFIRMED:
           status = 'PAID';
