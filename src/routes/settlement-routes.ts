@@ -13,6 +13,18 @@ const SettleSchema = z.object({
 });
 
 export async function settlementRoutes(fastify: FastifyInstance) {
+  fastify.get('/api/settlements', async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const settlements = await settlementService.getSettlements();
+      return reply.send(settlements);
+    } catch (error) {
+      if (error instanceof AppError) {
+        return reply.status(error.statusCode).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
   fastify.post('/api/settle', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const body = SettleSchema.parse(request.body);

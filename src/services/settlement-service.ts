@@ -1,4 +1,5 @@
 import { EventService, eventService as defaultEventService } from './event-service';
+import prisma from '../lib/prisma';
 
 export class SettlementService {
   private eventService: EventService;
@@ -14,6 +15,12 @@ export class SettlementService {
 
   async verifyLedger(orderId: string) {
     return this.eventService.verifyLedgerBalance(orderId);
+  }
+
+  async getSettlements() {
+    return prisma.settlement.findMany({
+      orderBy: { settlementDate: 'desc' },
+    });
   }
 }
 
