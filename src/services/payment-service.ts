@@ -53,12 +53,17 @@ export class PaymentService {
     );
 
     if (processingResult.idempotent) {
-      return {
-        order: processingResult.order,
-        payment: null,
-        event: processingResult.event,
-        idempotent: true,
-      };
+      // Order is already past PAYMENT_PROCESSING — full payment flow completed
+      if (processingResult.order?.status !== 'PAYMENT_PROCESSING') {
+        return {
+          order: processingResult.order,
+          payment: null,
+          event: processingResult.event,
+          idempotent: true,
+        };
+      }
+      // Order is still PAYMENT_PROCESSING: processing event was recorded but
+      // the charge + confirmation never completed. Fall through to retry the charge.
     }
 
     try {
