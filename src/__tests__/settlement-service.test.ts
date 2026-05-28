@@ -28,13 +28,13 @@ describe('SettlementService', () => {
   });
 
   describe('dailySettlement', () => {
-    it('should process settlement for FEE_CALCULATED orders', async () => {
+    it('should process settlement for DELIVERED orders', async () => {
       mockPrisma.settlement.findUnique.mockResolvedValue(null);
       mockPrisma.order.findMany.mockResolvedValue([
         {
           id: 'order-settle-1',
-          status: 'FEE_CALCULATED',
-          version: 4,
+          status: 'DELIVERED',
+          version: 6,
           paymentReceived: new Prisma.Decimal('100.0000'),
           feeAmount: new Prisma.Decimal('3.0000'),
           amount: new Prisma.Decimal('100.0000'),

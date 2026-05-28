@@ -81,7 +81,7 @@ describe('PaymentService', () => {
   });
 
   describe('processPayment - idempotency', () => {
-    it('should return idempotent result if already processing', async () => {
+    it('should return idempotent result when payment already fully completed', async () => {
       mockEventService.startPaymentProcessing.mockResolvedValue({
         order: { id: 'order-1', status: 'PAID', version: 3 } as any,
         event: { id: 'evt-existing' } as any,
@@ -98,6 +98,31 @@ describe('PaymentService', () => {
       expect(result.idempotent).toBe(true);
       expect(result.payment).toBeNull();
       expect(mockEventService.recordPayment).not.toHaveBeenCalled();
+    });
+
+    it('should retry charge when stuck in PAYMENT_PROCESSING (crash-recovery path)', async () => {
+      // Simulates: startPaymentProcessing succeeded but recordPayment never ran
+      mockEventService.startPaymentProcessing.mockResolvedValue({
+        order: { id: 'order-1', status: 'PAYMENT_PROCESSING', version: 2 } as any,
+        event: { id: 'evt-processing' } as any,
+        idempotent: true,
+      });
+
+      mockEventService.recordPayment.mockResolvedValue({
+        order: { id: 'order-1', status: 'PAID', version: 3 } as any,
+        event: { id: 'evt-confirmed' } as any,
+        idempotent: false,
+      });
+
+      const result = await paymentService.processPayment(
+        'order-1',
+        '100.0000',
+        'cust-1',
+        'pay-retry-1'
+      );
+
+      expect(result.order?.status).toBe('PAID');
+      expect(mockEventService.recordPayment).toHaveBeenCalledTimes(1);
     });
   });
 
